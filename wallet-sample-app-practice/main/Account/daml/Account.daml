@@ -1,0 +1,98 @@
+module Account where 
+
+import DA.Set as Set
+import DA.Foldable (forA_)
+import Asset
+
+-- validate input and return difference between asset amounts and split amounts
+validateMergeSplitInput: AssetHoldingAccount -> [ContractId Asset] -> [Decimal] -> Update Decimal 
+validateMergeSplitInput account assetCids amounts = do 
+  forA_ amounts \amount -> assertMsg "amount must > 0" (amount > 0.0)
+  let splitAmount = sum amounts 
+  totalAssetAmount <- sum <$> forA assetCids \assetCid -> do 
+    asset <- fetch assetCid 
+    assertMsg "must same assetType" (asset.assetType == account.assetType)
+    assertMsg "must same owner" (asset.owner == account.owner)
+    return asset.amount 
+  assertMsg "asset amounts must be greater than split amounts" (totalAssetAmount >= splitAmount)
+
+  return (totalAssetAmount - splitAmount)
+
+
+
+-- AssetHoldingAccount needs invitation from issuer
+-- owner can propose close account, issuer accepts with list of assetCids because needs to call from client side
+-- Invite_New_Asset_Holder, Airdrop, Merge_Split
+
+template AssetHoldingAccount with 
+    assetType: AssetType 
+    owner: Party 
+    airdroppable: Bool 
+    resharable: Bool 
+  where 
+    signatory assetType.issuer, owner 
+
+    nonconsuming choice Invite_New_Asset_Holder_1: () with -- cannot return ContractId AssetHoldingAccountProposal if use controller owner only
+        recipient: Party 
+      controller owner  
+      do 
+        assertMsg "account not resharable" (resharable) 
+        create AssetHoldingAccountProposal with assetHoldingAccount = this, recipient 
+        return () 
+
+    nonconsuming choice Invite_New_Asset_Holder: ContractId AssetHoldingAccountProposal with 
+        recipient: Party 
+      controller (if resharable then owner else assetType.issuer)  
+      do 
+        create AssetHoldingAccountProposal with assetHoldingAccount = this , recipient 
+
+    nonconsuming choice Merge_Split: [ContractId Asset] with 
+        assetCids: [ContractId Asset] 
+        amounts: [Decimal] 
+      controller owner 
+      do 
+        assertMsg "can only merge split fungible" (assetType.fungible)
+        difference <- validateMergeSplitInput this assetCids amounts 
+        forA_ assetCids archive 
+        newAssetCids <- forA amounts \amount -> do 
+          create Asset with assetType, owner, amount, observers = Set.empty 
+        if (difference > 0.0) then do 
+          otherAssetCid <- (create Asset with assetType, owner, amount = difference, observers = Set.empty)
+          return (otherAssetCid :: newAssetCids)
+        else return newAssetCids 
+    
+    nonconsuming choice Airdrop : ContractId Asset
+      with
+        amount : Decimal
+      controller assetType.issuer 
+      do
+        assertMsg "account not airdroppable or issuer airdropping self" (airdroppable || assetType.issuer == owner)
+        assertMsg "nonfungible must have amount equals 1.0" $ (assetType.fungible || amount==1.0)
+        create Asset with assetType, owner, amount, observers = Set.empty
+
+
+
+
+
+template AssetHoldingAccountProposal with 
+    assetHoldingAccount: AssetHoldingAccount -- Record data type 
+    recipient: Party -- we can remove this and use assetHoldingAccount.owner but it would make code hard to read
+  where 
+    signatory assetHoldingAccount.assetType.issuer 
+    observer recipient 
+    
+    choice AssetHoldingAccountProposal_Accept: ContractId AssetHoldingAccount 
+      controller recipient 
+      do 
+        create assetHoldingAccount with owner = recipient 
+    
+    choice AssetHoldingAccountProposal_Reject: () 
+      controller recipient 
+      do
+        return ()
+    
+    choice AssetHoldingAccountProposal_Cancel: () 
+      controller assetHoldingAccount.assetType.issuer 
+      do 
+        return () 
+
