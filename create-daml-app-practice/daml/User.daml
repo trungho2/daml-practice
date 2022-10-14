@@ -1,0 +1,68 @@
+module User where 
+
+template User with 
+    username: Party 
+    following: [Party]
+  where 
+    signatory username 
+    observer following 
+
+    key username: Party 
+    maintainer key 
+
+    nonconsuming choice Follow: ContractId User with 
+        partyToFollow: Party 
+      controller username 
+      do 
+        assertMsg ("Already follow this party " <> show partyToFollow) (notElem partyToFollow following)
+        assertMsg ("Cannot follow self") (partyToFollow /= username)
+        archive self 
+        create this with following = partyToFollow :: following 
+    
+    -- nonconsuming choice SendMessage: ContractId Message with  -- not use (Why?), if use then Message signatory sender only
+    --     content: Text 
+    --     receiver: Party 
+    --   controller username 
+    --   do 
+    --     (userId, user) <- fetchByKey @User receiver 
+    --     assertMsg ("receiver must follow u back") (elem username user.following)
+    --     create Message with sender = username, receiver, content 
+
+    -- use this because Message need both sender and receiver as signatory?
+    -- if want use normal flow (username of this contract initiates, choice argument will have receiver not sender), 
+    -- then have to create a mutual contract between sender and receiver that allows sending and receiving message?
+    nonconsuming choice SendMessage: ContractId Message with 
+        content: Text 
+        sender: Party 
+      controller sender 
+      do 
+        assertMsg (show username <> " must follow u back") (elem sender following) 
+        create Message with sender, receiver = username, content
+
+
+template Message with 
+    sender: Party 
+    receiver: Party 
+    content: Text 
+  where
+    signatory sender, receiver
+
+
+template Alias with 
+    username: Party 
+    alias: Text 
+    public: Party 
+  where 
+    signatory username 
+    observer public 
+
+    key (username, public): (Party, Party) 
+    maintainer key._1
+
+    nonconsuming choice Change: ContractId Alias with 
+        newAlias: Text 
+      controller username 
+      do 
+        assertMsg ("What are you doing?") (newAlias /= alias) 
+        archive self 
+        create this with alias = newAlias 
