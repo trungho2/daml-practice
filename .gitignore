@@ -1,3 +1,5 @@
-/.daml
-/log
+.daml
+log
 navigator.log
+*.dar
+.DS_Store
