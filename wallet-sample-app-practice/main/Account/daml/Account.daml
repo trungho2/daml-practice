@@ -2,6 +2,8 @@ module Account where
 
 import DA.Set as Set
 import DA.Foldable (forA_)
+import qualified DA.List as L
+import DA.Action (when)
 import Asset
 
 -- validate input and return difference between asset amounts and split amounts
@@ -18,11 +20,10 @@ validateMergeSplitInput account assetCids amounts = do
 
   return (totalAssetAmount - splitAmount)
 
-
-
 -- AssetHoldingAccount needs invitation from issuer
 -- owner can propose close account, issuer accepts with list of assetCids because needs to call from client side
 -- Invite_New_Asset_Holder, Airdrop, Merge_Split
+-- Create_Transfers && Deposit_Transfer_Into_Account
 
 template AssetHoldingAccount with 
     assetType: AssetType 
@@ -46,6 +47,7 @@ template AssetHoldingAccount with
       do 
         create AssetHoldingAccountProposal with assetHoldingAccount = this , recipient 
 
+    -- assetCids obtained in client side and passed to choice arguments
     nonconsuming choice Merge_Split: [ContractId Asset] with 
         assetCids: [ContractId Asset] 
         amounts: [Decimal] 
@@ -69,8 +71,51 @@ template AssetHoldingAccount with
         assertMsg "account not airdroppable or issuer airdropping self" (airdroppable || assetType.issuer == owner)
         assertMsg "nonfungible must have amount equals 1.0" $ (assetType.fungible || amount==1.0)
         create Asset with assetType, owner, amount, observers = Set.empty
-
-
+    
+    nonconsuming choice Create_Transfers: [ContractId AssetTransfer]
+      with 
+        assetCids: [ContractId Asset] 
+        transfers: [(Decimal, Party)]
+      controller owner 
+      do 
+        let (amounts, newOwners) = unzip transfers 
+        assertMsg "can only transfer 1 nonfungile asset at a time" (assetType.fungible || (length assetCids == 1 && length transfers == 1 && L.head amounts == 1.0))
+        difference <- validateMergeSplitInput this assetCids amounts 
+        forA_ assetCids archive
+        newAssetCids <- forA transfers \(amount, newOwner) -> do 
+          create AssetTransfer with 
+            asset = Asset with 
+              assetType 
+              owner
+              amount 
+              observers = Set.empty 
+            receiver = newOwner 
+        when (difference > 0.0) do 
+          create Asset with assetType, owner, amount = difference, observers = Set.empty
+          return ()
+        return newAssetCids 
+    
+    nonconsuming choice Deposit_Transfer_Into_Account: ContractId Asset 
+      with 
+        assetTransferCid: ContractId AssetTransfer 
+      controller owner 
+      do 
+        assetTransfer <- fetch assetTransferCid 
+        assertMsg "not same assetType" (assetTransfer.asset.assetType == assetType)
+        assertMsg "asset holding owner and asset transfer receiver mismatch" (assetTransfer.receiver == owner)
+        create Asset with assetType, owner, amount = assetTransfer.asset.amount, observers = Set.empty 
+    
+    nonconsuming choice Create_Trade: ContractId Trade 
+      with 
+        assetCids: [ContractId Asset] 
+        offeredAmount: Decimal 
+        requestedAsset: Asset 
+      controller owner 
+      do 
+        assertMsg "can only trade 1 nonfungile asset at a time" (assetType.fungible || (length assetCids == 1 && offeredAmount == 1.0))
+        difference <- validateMergeSplitInput this assetCids [offeredAmount] 
+        forA_ assetCids archive 
+        -- to be continued
 
 
 
@@ -95,4 +140,63 @@ template AssetHoldingAccountProposal with
       controller assetHoldingAccount.assetType.issuer 
       do 
         return () 
+
+template AssetInSwap with 
+    asset: Asset 
+    newOwner: Party 
+  where 
+    signatory (signatory asset) 
+    observer newOwner 
+
+template TransferPreApproval with 
+    asset: Asset 
+    newOwner: Party 
+  where 
+    signatory asset.assetType.issuer, asset.owner 
+    observer newOwner 
+
+    choice TransferPreApproval_Reject: () 
+      controller newOwner 
+      do 
+        return () 
+    choice TransferPreApproval_Cancel: () 
+      controller asset.owner 
+      do 
+        return ()
+    choice TransferPreApproval_Accept: ContractId Asset 
+      with 
+        assetCid: ContractId Asset 
+      controller asset.owner, newOwner 
+      do 
+        fetchedAsset <- fetch assetCid 
+        assertMsg "preapproval asset and provided asset are not the same" (asset == fetchedAsset with observers = asset.observers)
+        archive assetCid 
+        create asset with owner = newOwner, observers = Set.empty 
+    choice TransferPreApproval_AcceptSwap: ContractId Asset 
+      with 
+        assetInSwapCid: ContractId AssetInSwap 
+      controller asset.owner, newOwner 
+      do 
+        assetInSwap <- fetch assetInSwapCid 
+        assertMsg "preapproval asset and provided asset in swap are not the same" (asset == assetInSwap.asset with observers = asset.observers)
+        archive assetInSwapCid
+        create asset with owner = newOwner, observers = Set.empty 
+
+template Trade with 
+    baseAssetInSwapCid: ContractId AssetInSwap -- use AssetInSwap to lock the Asset 
+    baseAsset: Asset 
+    requestedAsset: Asset 
+    requestedAssetPreApprovalCid: ContractId TransferPreApproval
+  where 
+    signatory (signatory baseAsset)
+    observer requestedAsset.owner 
+
+    -- choice Trade_Accept: (ContractId Asset, ContractId Asset) 
+    --   with 
+    --     requestedAssetCids: [ContractId Asset] 
+    --   controller requestedAsset.owner 
+    --   do 
+    --     return ()
+
+
 
