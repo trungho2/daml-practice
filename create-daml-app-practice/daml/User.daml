@@ -10,13 +10,12 @@ template User with
     key username: Party 
     maintainer key 
 
-    nonconsuming choice Follow: ContractId User with 
+    choice Follow: ContractId User with 
         partyToFollow: Party 
       controller username 
       do 
         assertMsg ("Already follow this party " <> show partyToFollow) (notElem partyToFollow following)
         assertMsg ("Cannot follow self") (partyToFollow /= username)
-        archive self 
         create this with following = partyToFollow :: following 
     
     -- nonconsuming choice SendMessage: ContractId Message with  -- not use (Why?), if use then Message signatory sender only
@@ -59,10 +58,9 @@ template Alias with
     key (username, public): (Party, Party) 
     maintainer key._1
 
-    nonconsuming choice Change: ContractId Alias with 
+    choice Change: ContractId Alias with 
         newAlias: Text 
       controller username 
       do 
-        assertMsg ("What are you doing?") (newAlias /= alias) 
-        archive self 
+        assertMsg ("New alias must be different from previous one") (newAlias /= alias) 
         create this with alias = newAlias 

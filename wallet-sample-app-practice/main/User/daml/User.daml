@@ -17,10 +17,9 @@ template Alias with
     key (username, public): (Party, Party) 
     maintainer key._1 
 
-    -- why nonconsuming + archive self?
-    nonconsuming choice Change: ContractId Alias with 
+    choice Change: ContractId Alias with 
         newAlias: Text 
       controller username 
       do 
-        archive self 
+        assertMsg ("New alias must be different from previous one") (newAlias /= alias)
         create this with alias = newAlias 
