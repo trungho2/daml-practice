@@ -1,1 +1,35 @@
 module Test where 
+
+import DA.Set as Set
+import Daml.Script 
+import Asset 
+
+testBankAsset: Script ()
+testBankAsset = do 
+  bank <- allocateParty "Bank" 
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  let 
+    assetType = AssetType with 
+      issuer = bank 
+      symbol = "USD" 
+      fungible = True 
+      reference = None 
+  aliceAccount <- submit bank do 
+    createCmd BankAccount with 
+      assetType 
+      owner = alice 
+  aliceAsset <- submit bank do 
+    createCmd BankAsset with 
+      assetType 
+      owner = alice 
+      observers = Set.empty 
+      amount = 5.0
+  bobAsset <- submit alice do 
+    exerciseCmd aliceAccount Transfer with 
+      assetCid = aliceAsset 
+      newOwner = bob 
+  
+  return ()
+  

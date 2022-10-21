@@ -45,3 +45,44 @@ template AssetTransfer with
         create asset with 
           owner = receiver 
           observers = Set.empty 
+      
+
+template BankAsset with 
+    assetType: AssetType 
+    owner: Party 
+    amount: Decimal 
+    observers: Set Party 
+  where 
+    signatory assetType.issuer 
+    observer owner, observers 
+    ensure (if assetType.fungible then amount > 0.0 else amount == 1.0) 
+
+    -- choice Archive: () 
+    --   controller assetType.issuer 
+    --   do 
+    --     assertMsg "asset must belong to issuer before being destroyed" (assetType.issuer == owner)
+    --     return ()
+
+template BankAccount with 
+    assetType: AssetType 
+    owner: Party 
+  where 
+    signatory assetType.issuer 
+    observer owner 
+    key (assetType, owner): (AssetType, Party)
+    maintainer key._1.issuer  
+
+    choice Transfer: ContractId BankAsset with 
+        assetCid: ContractId BankAsset 
+        newOwner: Party 
+      controller owner 
+      do 
+        asset <- fetch assetCid 
+        assertMsg ("asset must be the same type") (asset.assetType == assetType)
+        assertMsg ("asset must have the same owner") (asset.owner == owner)
+        create asset with owner = newOwner 
+
+    -- choice Archive: () 
+    --   controller owner  
+    --   do 
+    --     return ()

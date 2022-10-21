@@ -32,6 +32,8 @@ template AssetHoldingAccount with
     resharable: Bool 
   where 
     signatory assetType.issuer, owner 
+    key (assetType, owner): (AssetType, Party) 
+    maintainer key._1.issuer 
 
     nonconsuming choice Invite_New_Asset_Holder_1: () with -- cannot return ContractId AssetHoldingAccountProposal if use controller owner only
         recipient: Party 
@@ -115,8 +117,29 @@ template AssetHoldingAccount with
         assertMsg "can only trade 1 nonfungile asset at a time" (assetType.fungible || (length assetCids == 1 && offeredAmount == 1.0))
         difference <- validateMergeSplitInput this assetCids [offeredAmount] 
         forA_ assetCids archive 
-        -- to be continued
+        
+        assetInSwapCid <- create AssetInSwap with 
+          asset = Asset with assetType, owner, amount = offeredAmount, observers = Set.empty 
+          newOwner = requestedAsset.owner 
+        when (difference > 0.0) do 
+          create Asset with assetType, owner, amount = difference, observers = Set.empty 
+          return () 
+        requestedAssetPreApprovalCid <- exercise self Preapprove_Transfer with 
+          asset = requestedAsset 
+        create Trade with 
+          proposer = owner 
+          receiver = requestedAsset.owner 
+          baseAssetInSwapCid = assetInSwapCid 
+          requestedAssetPreApprovalCid 
 
+    nonconsuming choice Preapprove_Transfer: ContractId TransferPreApproval 
+      with 
+        asset: Asset 
+      controller owner 
+      do 
+        create TransferPreApproval with 
+          asset 
+          newOwner = owner 
 
 
 template AssetHoldingAccountProposal with 
@@ -141,6 +164,8 @@ template AssetHoldingAccountProposal with
       do 
         return () 
 
+-- use AssetInSwap to lock the Asset 
+-- cancel_swap first then cancel_trade => fail => AssetInSwap needs to have 2 signatories
 template AssetInSwap with 
     asset: Asset 
     newOwner: Party 
@@ -148,6 +173,7 @@ template AssetInSwap with
     signatory (signatory asset) 
     observer newOwner 
 
+-- preapproval created by receiver, asset is of sender
 template TransferPreApproval with 
     asset: Asset 
     newOwner: Party 
@@ -181,22 +207,32 @@ template TransferPreApproval with
         assertMsg "preapproval asset and provided asset in swap are not the same" (asset == assetInSwap.asset with observers = asset.observers)
         archive assetInSwapCid
         create asset with owner = newOwner, observers = Set.empty 
-
+        
 template Trade with 
-    baseAssetInSwapCid: ContractId AssetInSwap -- use AssetInSwap to lock the Asset 
-    baseAsset: Asset 
-    requestedAsset: Asset 
+    proposer: Party 
+    receiver: Party 
+    baseAssetInSwapCid: ContractId AssetInSwap 
     requestedAssetPreApprovalCid: ContractId TransferPreApproval
   where 
-    signatory (signatory baseAsset)
-    observer requestedAsset.owner 
+    signatory proposer 
+    observer receiver 
 
-    -- choice Trade_Accept: (ContractId Asset, ContractId Asset) 
-    --   with 
-    --     requestedAssetCids: [ContractId Asset] 
-    --   controller requestedAsset.owner 
-    --   do 
-    --     return ()
+    choice Trade_Accept: (ContractId Asset, ContractId Asset) 
+      with 
+        requestedAssetCids: [ContractId Asset] 
+      controller receiver  
+      do 
+        requestedAssetPreApproval <- fetch requestedAssetPreApprovalCid
+        (receiverAccountCid, _) <- fetchByKey @AssetHoldingAccount (requestedAssetPreApproval.asset.assetType, receiver)
+        requestedAssetMergeSplitCids <- exercise receiverAccountCid Merge_Split with 
+          assetCids = requestedAssetCids 
+          amounts = [requestedAssetPreApproval.asset.amount]
+        baseAssetInSwap <- fetch baseAssetInSwapCid
+        baseAssetPreApprovalCid <- exercise receiverAccountCid Preapprove_Transfer with 
+          asset = baseAssetInSwap.asset 
+        newReceiverAsset <- exercise baseAssetPreApprovalCid TransferPreApproval_AcceptSwap with assetInSwapCid = baseAssetInSwapCid
+        newProposerAsset <- exercise requestedAssetPreApprovalCid TransferPreApproval_Accept with assetCid = L.last requestedAssetMergeSplitCids 
+        return (newProposerAsset, newReceiverAsset)
 
 
 
