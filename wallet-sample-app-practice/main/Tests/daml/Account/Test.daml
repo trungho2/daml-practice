@@ -1,0 +1,87 @@
+module Account.Test where 
+
+import Daml.Script 
+import qualified DA.Set as Set 
+import qualified DA.List as L
+
+import Asset 
+import Account 
+import Asset.Test 
+
+template Helper with 
+    owner: Party 
+  where 
+    signatory owner 
+    nonconsuming choice Fetch_Assets: [Asset] with 
+        assetCids: [ContractId Asset] 
+      controller owner 
+      do 
+        forA assetCids \assetCid -> fetch assetCid 
+
+test_Invite_Holder_resharable: Script () 
+test_Invite_Holder_resharable = do 
+  (parties@Parties{..}, assetData@AssetData{..}) <- setup 
+
+  bobUsdInvitation <- submit alice $ exerciseCmd aliceUsdAccount Invite_New_Asset_Holder with recipient = bob 
+  bobUsdAccount <- submit bob $ exerciseCmd bobUsdInvitation AssetHoldingAccountProposal_Accept 
+
+  return () 
+
+test_Invite_Holder_nonresharable = do 
+  (parties@Parties{..}, assetData@AssetData{..}) <- setup 
+
+  submitMustFail bob $ exerciseCmd bobEurAccount Invite_New_Asset_Holder with recipient = alice 
+
+  return () 
+
+test_nonairdoppable = do 
+  (parties@Parties{..}, assetData@AssetData{..}) <- setup 
+
+  submitMustFail artist $ exerciseCmd charlieNftAccount Airdrop with amount = 1.0
+
+  return ()
+
+test_nonfungible_airdoppable = do 
+  (parties@Parties{..}, _) <- setup 
+
+  let 
+    nftAssetType = AssetType with 
+      issuer = artist 
+      symbol = "Picture1" 
+      fungible = False 
+      reference = Some "" 
+
+  artistNftAccount <- submit artist $ createCmd AssetHoldingAccount with 
+    assetType = nftAssetType 
+    owner = artist 
+    airdroppable = True   
+    resharable = False  
+  
+  charlieNftInvitation <- submit artist $ exerciseCmd artistNftAccount Invite_New_Asset_Holder with recipient = charlie 
+  charlieNftAccount <- submit charlie $ exerciseCmd charlieNftInvitation AssetHoldingAccountProposal_Accept 
+  submitMustFail artist $ exerciseCmd charlieNftAccount Airdrop with amount = 2.0
+  charlieNftAsset1 <- submit artist $ exerciseCmd charlieNftAccount Airdrop with amount = 1.0
+
+  return () 
+
+test_Merge_Split = do 
+  (parties@Parties{..}, assetData@AssetData{..}) <- setup 
+
+  assetCids <- submit alice $ exerciseCmd aliceUsdAccount Merge_Split with assetCids = aliceUsdAssets, amounts = [40.0, 80.0, 90.0] 
+  helper <- submit alice $ createCmd Helper with owner = alice 
+  assets <- submit alice $ exerciseCmd helper Fetch_Assets with assetCids 
+  assertMsg "there must be 4 assets" (L.length assets == 4)
+  let [asset1, asset2, asset3, asset4] = L.sortBy sortAssetByAmount assets 
+
+  assert (asset1.amount == 10.0)
+  assert (asset2.amount == 40.0)
+  assert (asset3.amount == 80.0)
+  assert (asset4.amount == 90.0)
+
+  return ()
+
+sortAssetByAmount a b 
+  | a.amount > b.amount = GT 
+  | a.amount < b.amount = LT 
+  | a.amount == b.amount = EQ 
+

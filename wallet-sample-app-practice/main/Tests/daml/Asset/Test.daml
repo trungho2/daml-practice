@@ -1,0 +1,113 @@
+module Asset.Test where 
+
+import Daml.Script 
+import qualified DA.Set as Set 
+import qualified DA.List as L
+
+import Asset 
+import Account 
+
+data Parties = Parties with 
+  usdBank: Party 
+  eurBank: Party 
+  artist: Party 
+  alice: Party 
+  bob: Party 
+  charlie: Party 
+
+data AssetData = AssetData with 
+  usdBankAccount: ContractId AssetHoldingAccount 
+  eurBankAccount: ContractId AssetHoldingAccount 
+  artistNftAccount: ContractId AssetHoldingAccount 
+  aliceUsdAccount: ContractId AssetHoldingAccount 
+  bobEurAccount: ContractId AssetHoldingAccount 
+  charlieNftAccount: ContractId AssetHoldingAccount 
+  aliceUsdAssets: [ContractId Asset] 
+  bobEurAssets: [ContractId Asset] 
+  charlieNftAssets: [ContractId Asset] 
+
+setup: Script (Parties, AssetData)
+setup = do 
+  usdBank <- allocateParty("UsdBank")
+  eurBank <- allocateParty("EurBank")
+  artist <- allocateParty("Artist")
+  alice <- allocateParty("Alice")
+  bob <- allocateParty("Bob")
+  charlie <- allocateParty("Charlie")
+
+  let 
+    usdAssetType = AssetType with 
+      issuer = usdBank 
+      symbol = "USD" 
+      fungible = True 
+      reference = Some "" 
+    eurAssetType = AssetType with 
+      issuer = eurBank 
+      symbol = "EUR" 
+      fungible = True 
+      reference = Some "" 
+    nftAssetType = AssetType with 
+      issuer = artist 
+      symbol = "Picture" 
+      fungible = False 
+      reference = Some "" 
+  
+  usdBankAccount <- submit usdBank $ createCmd AssetHoldingAccount with 
+    assetType = usdAssetType 
+    owner = usdBank 
+    airdroppable = True 
+    resharable = True 
+  
+  aliceUsdInvitation <- submit usdBank $ exerciseCmd usdBankAccount Invite_New_Asset_Holder with recipient = alice 
+  aliceUsdAccount <- submit alice $ exerciseCmd aliceUsdInvitation AssetHoldingAccountProposal_Accept 
+  aliceUsdAsset1 <- submit usdBank $ exerciseCmd aliceUsdAccount Airdrop with amount = 50.0
+  aliceUsdAsset2 <- submit usdBank $ exerciseCmd aliceUsdAccount Airdrop with amount = 70.0
+  aliceUsdAsset3 <- submit usdBank $ exerciseCmd aliceUsdAccount Airdrop with amount = 100.0 
+
+  eurBankAccount <- submit eurBank $ createCmd AssetHoldingAccount with 
+    assetType = eurAssetType 
+    owner = eurBank 
+    airdroppable = True 
+    resharable = False 
+
+  bobEurInvitation <- submit eurBank $ exerciseCmd eurBankAccount Invite_New_Asset_Holder with recipient = bob 
+  bobEurAccount <- submit bob $ exerciseCmd bobEurInvitation AssetHoldingAccountProposal_Accept 
+  bobEurAsset1 <- submit eurBank $ exerciseCmd bobEurAccount Airdrop with amount = 80.0 
+  bobEurAsset2 <- submit eurBank $ exerciseCmd bobEurAccount Airdrop with amount = 120.0 
+
+  artistNftAccount <- submit artist $ createCmd AssetHoldingAccount with 
+    assetType = nftAssetType 
+    owner = artist 
+    airdroppable = False   
+    resharable = False  
+  
+  charlieNftInvitation <- submit artist $ exerciseCmd artistNftAccount Invite_New_Asset_Holder with recipient = charlie 
+  charlieNftAccount <- submit charlie $ exerciseCmd charlieNftInvitation AssetHoldingAccountProposal_Accept 
+  nftAsset1 <- submit artist $ createCmd Asset with assetType = nftAssetType, owner = artist, amount = 1.0, observers = Set.empty 
+  nftAssetTransfers1 <- submit artist $ exerciseCmd artistNftAccount Create_Transfers with 
+    assetCids = [nftAsset1] 
+    transfers = [(1.0, charlie)] 
+  charlieNftAsset1 <- submit charlie $ exerciseCmd charlieNftAccount Deposit_Transfer_Into_Account with 
+    assetTransferCid = (L.head nftAssetTransfers1) 
+  nftAsset2 <- submit artist $ createCmd Asset with assetType = nftAssetType, owner = artist, amount = 1.0, observers = Set.empty 
+  nftAssetTransfers2 <- submit artist $ exerciseCmd artistNftAccount Create_Transfers with 
+    assetCids = [nftAsset2] 
+    transfers = [(1.0, charlie)] 
+  charlieNftAsset2 <- submit charlie $ exerciseCmd charlieNftAccount Deposit_Transfer_Into_Account with 
+    assetTransferCid = (L.head nftAssetTransfers2) 
+
+  let 
+    parties = Parties with usdBank, eurBank, artist, alice, bob, charlie 
+    assetData = AssetData with 
+      usdBankAccount 
+      eurBankAccount 
+      artistNftAccount 
+      aliceUsdAccount 
+      bobEurAccount 
+      charlieNftAccount 
+      aliceUsdAssets = [aliceUsdAsset1, aliceUsdAsset2, aliceUsdAsset3] 
+      bobEurAssets = [bobEurAsset1, bobEurAsset2] 
+      charlieNftAssets = [charlieNftAsset1, charlieNftAsset2]
+  
+  return (parties, assetData) 
+

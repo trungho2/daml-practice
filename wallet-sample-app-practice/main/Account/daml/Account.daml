@@ -1,9 +1,10 @@
 module Account where 
 
-import DA.Set as Set
+import qualified DA.Set as Set
 import DA.Foldable (forA_)
 import qualified DA.List as L
 import DA.Action (when)
+import DA.Optional (whenSome)
 import Asset
 
 -- validate input and return difference between asset amounts and split amounts
@@ -34,14 +35,6 @@ template AssetHoldingAccount with
     signatory assetType.issuer, owner 
     key (assetType, owner): (AssetType, Party) 
     maintainer key._1.issuer 
-
-    nonconsuming choice Invite_New_Asset_Holder_1: () with -- cannot return ContractId AssetHoldingAccountProposal if use controller owner only
-        recipient: Party 
-      controller owner  
-      do 
-        assertMsg "account not resharable" (resharable) 
-        create AssetHoldingAccountProposal with assetHoldingAccount = this, recipient 
-        return () 
 
     nonconsuming choice Invite_New_Asset_Holder: ContractId AssetHoldingAccountProposal with 
         recipient: Party 
@@ -107,6 +100,17 @@ template AssetHoldingAccount with
         assertMsg "asset holding owner and asset transfer receiver mismatch" (assetTransfer.receiver == owner)
         create Asset with assetType, owner, amount = assetTransfer.asset.amount, observers = Set.empty 
     
+    nonconsuming choice Deposit_Multiple_Transfers: [ContractId Asset]
+      with 
+        assetTransferCids: [ContractId AssetTransfer] 
+      controller owner 
+      do 
+        forA assetTransferCids $ \assetTransferCid -> do 
+          assetTransfer <- fetch assetTransferCid 
+          assertMsg "not same assetType" (assetTransfer.asset.assetType == assetType)
+          assertMsg "asset holding owner and asset transfer receiver mismatch" (assetTransfer.receiver == owner)
+          create Asset with assetType, owner, amount = assetTransfer.asset.amount, observers = Set.empty 
+    
     nonconsuming choice Create_Trade: ContractId Trade 
       with 
         assetCids: [ContractId Asset] 
@@ -115,6 +119,7 @@ template AssetHoldingAccount with
       controller owner 
       do 
         assertMsg "can only trade 1 nonfungile asset at a time" (assetType.fungible || (length assetCids == 1 && offeredAmount == 1.0))
+        assertMsg "can only trade for 1 nonfungible asset at a time" (requestedAsset.assetType.fungible || requestedAsset.amount == 1.0)
         difference <- validateMergeSplitInput this assetCids [offeredAmount] 
         forA_ assetCids archive 
         
@@ -124,7 +129,9 @@ template AssetHoldingAccount with
         when (difference > 0.0) do 
           create Asset with assetType, owner, amount = difference, observers = Set.empty 
           return () 
-        requestedAssetPreApprovalCid <- exercise self Preapprove_Transfer with 
+        (senderReceivingAssetAccountCid, _) <- fetchByKey @AssetHoldingAccount (requestedAsset.assetType, owner)
+        -- sending asset and requested asset might be of different asset type
+        requestedAssetPreApprovalCid <- exercise senderReceivingAssetAccountCid Preapprove_Transfer with 
           asset = requestedAsset 
         create Trade with 
           proposer = owner 
@@ -140,7 +147,11 @@ template AssetHoldingAccount with
         create TransferPreApproval with 
           asset 
           newOwner = owner 
-
+    
+    nonconsuming choice Close_Account: ContractId AssetHoldingAccountCloseProposal 
+      controller owner 
+      do 
+        create AssetHoldingAccountCloseProposal with account = this 
 
 template AssetHoldingAccountProposal with 
     assetHoldingAccount: AssetHoldingAccount -- Record data type 
@@ -173,6 +184,16 @@ template AssetInSwap with
     signatory (signatory asset) 
     observer newOwner 
 
+    choice Cancel_Swap: ContractId Asset 
+      controller asset.owner 
+      do 
+        create asset 
+    
+    choice Reject_Swap: ContractId Asset 
+      controller newOwner 
+      do 
+        create asset 
+
 -- preapproval created by receiver, asset is of sender
 template TransferPreApproval with 
     asset: Asset 
@@ -185,10 +206,12 @@ template TransferPreApproval with
       controller newOwner 
       do 
         return () 
+    
     choice TransferPreApproval_Cancel: () 
       controller asset.owner 
       do 
         return ()
+    
     choice TransferPreApproval_Accept: ContractId Asset 
       with 
         assetCid: ContractId Asset 
@@ -222,17 +245,52 @@ template Trade with
         requestedAssetCids: [ContractId Asset] 
       controller receiver  
       do 
+        baseAssetInSwap <- fetch baseAssetInSwapCid
+        -- need to account for receiver having 2 AssetHoldingAccounts, 1 for receiving asset of one type and 1 for sending asset of another type
+        (receiverReceivingAssetAccountCid, _) <- fetchByKey @AssetHoldingAccount (baseAssetInSwap.asset.assetType, receiver)
         requestedAssetPreApproval <- fetch requestedAssetPreApprovalCid
-        (receiverAccountCid, _) <- fetchByKey @AssetHoldingAccount (requestedAssetPreApproval.asset.assetType, receiver)
-        requestedAssetMergeSplitCids <- exercise receiverAccountCid Merge_Split with 
+        (receiverSendingAssetAccountCid, _) <- fetchByKey @AssetHoldingAccount (requestedAssetPreApproval.asset.assetType, receiver)
+        requestedAssetMergeSplitCids <- exercise receiverSendingAssetAccountCid Merge_Split with 
           assetCids = requestedAssetCids 
           amounts = [requestedAssetPreApproval.asset.amount]
-        baseAssetInSwap <- fetch baseAssetInSwapCid
-        baseAssetPreApprovalCid <- exercise receiverAccountCid Preapprove_Transfer with 
+        baseAssetPreApprovalCid <- exercise receiverReceivingAssetAccountCid Preapprove_Transfer with 
           asset = baseAssetInSwap.asset 
         newReceiverAsset <- exercise baseAssetPreApprovalCid TransferPreApproval_AcceptSwap with assetInSwapCid = baseAssetInSwapCid
         newProposerAsset <- exercise requestedAssetPreApprovalCid TransferPreApproval_Accept with assetCid = L.last requestedAssetMergeSplitCids 
         return (newProposerAsset, newReceiverAsset)
+    
+    choice Trade_Cancel: () 
+      controller proposer 
+      do 
+        exercise baseAssetInSwapCid Cancel_Swap 
+        return ()
+    
+    choice Trade_Reject: () 
+      controller receiver 
+      do 
+        exercise baseAssetInSwapCid Reject_Swap 
+        return ()
 
-
-
+template AssetHoldingAccountCloseProposal with 
+    account: AssetHoldingAccount 
+  where 
+    signatory account.assetType.issuer, account.owner 
+    choice AssetHoldingAccountCloseProposal_Accept: () 
+      with 
+        assetCids: [ContractId Asset] 
+      controller account.assetType.issuer 
+      do 
+        accountCid <- lookupByKey @AssetHoldingAccount (account.assetType, account.owner) 
+        whenSome accountCid \cid -> do 
+          forA_ assetCids \assetCid -> do 
+            asset <- fetch assetCid 
+            assertMsg "asset must have the same asset type as account" (asset.assetType == account.assetType) 
+            assertMsg "asset must have the same owner as account" (asset.owner == account.owner) 
+            archive assetCid 
+          archive cid 
+        return ()
+    
+    choice AssetHoldingAccountCloseProposal_Reject: () 
+      controller account.assetType.issuer 
+      do 
+        return ()

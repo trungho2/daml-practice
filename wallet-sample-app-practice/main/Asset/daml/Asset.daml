@@ -57,11 +57,13 @@ template BankAsset with
     observer owner, observers 
     ensure (if assetType.fungible then amount > 0.0 else amount == 1.0) 
 
-    -- choice Archive: () 
-    --   controller assetType.issuer 
-    --   do 
-    --     assertMsg "asset must belong to issuer before being destroyed" (assetType.issuer == owner)
-    --     return ()
+    choice BankAsset_Transfer: ContractId BankAsset with 
+        newOwner: Party 
+      controller owner, assetType.issuer 
+      do 
+        assertMsg ("asset must have the same type") (this.assetType == assetType) 
+        assertMsg ("asset must have the same owner") (this.owner == owner) 
+        create this with owner = newOwner 
 
 template BankAccount with 
     assetType: AssetType 
@@ -72,17 +74,11 @@ template BankAccount with
     key (assetType, owner): (AssetType, Party)
     maintainer key._1.issuer  
 
-    choice Transfer: ContractId BankAsset with 
+    nonconsuming choice BankAccount_AssetTransfer: ContractId BankAsset with 
         assetCid: ContractId BankAsset 
         newOwner: Party 
       controller owner 
       do 
-        asset <- fetch assetCid 
-        assertMsg ("asset must be the same type") (asset.assetType == assetType)
-        assertMsg ("asset must have the same owner") (asset.owner == owner)
-        create asset with owner = newOwner 
-
-    -- choice Archive: () 
-    --   controller owner  
-    --   do 
-    --     return ()
+        -- ensure newOwner has a bank account
+        (_, _) <- fetchByKey @BankAccount (assetType, newOwner)
+        exercise assetCid BankAsset_Transfer with newOwner 
