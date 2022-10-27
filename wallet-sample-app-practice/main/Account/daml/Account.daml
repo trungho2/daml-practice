@@ -14,8 +14,8 @@ validateMergeSplitInput account assetCids amounts = do
   let splitAmount = sum amounts 
   totalAssetAmount <- sum <$> forA assetCids \assetCid -> do 
     asset <- fetch assetCid 
-    assertMsg "must same assetType" (asset.assetType == account.assetType)
-    assertMsg "must same owner" (asset.owner == account.owner)
+    assertMsg "asset type mismatch between account and asset" (asset.assetType == account.assetType)
+    assertMsg "cannot merge split asset of another owner" (asset.owner == account.owner)
     return asset.amount 
   assertMsg "asset amounts must be greater than split amounts" (totalAssetAmount >= splitAmount)
 

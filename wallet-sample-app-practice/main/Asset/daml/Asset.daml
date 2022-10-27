@@ -18,7 +18,13 @@ template Asset with
     signatory assetType.issuer, owner 
     observer observers 
     ensure (if assetType.fungible then amount > 0.0 else amount == 1.0)
-    -- determined by amount so can't use key?
+    -- determined by amount so can't use key? 
+
+    choice Asset_Add_Observer: ContractId Asset with 
+        newObserver: Party 
+      controller owner 
+      do 
+        create this with observers = (Set.insert newObserver observers)
 
 template AssetTransfer with 
     asset: Asset 
@@ -59,7 +65,7 @@ template BankAsset with
 
     choice BankAsset_Transfer: ContractId BankAsset with 
         newOwner: Party 
-      controller owner, assetType.issuer 
+      controller assetType.issuer 
       do 
         assertMsg ("asset must have the same type") (this.assetType == assetType) 
         assertMsg ("asset must have the same owner") (this.owner == owner) 
@@ -77,7 +83,7 @@ template BankAccount with
     nonconsuming choice BankAccount_AssetTransfer: ContractId BankAsset with 
         assetCid: ContractId BankAsset 
         newOwner: Party 
-      controller owner 
+      controller assetType.issuer  
       do 
         -- ensure newOwner has a bank account
         (_, _) <- fetchByKey @BankAccount (assetType, newOwner)

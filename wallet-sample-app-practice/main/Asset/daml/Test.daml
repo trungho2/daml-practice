@@ -25,9 +25,13 @@ testBankAsset = do
       assetType 
       owner = alice 
       observers = Set.empty 
-      amount = 5.0
-  bobAsset <- submit alice do 
-    exerciseCmd aliceAccount Transfer with 
+      amount = 5.0 
+  bobAccount <- submit bank do 
+    createCmd BankAccount with 
+      assetType 
+      owner = bob 
+  bobAsset <- submit bank do 
+    exerciseCmd aliceAccount BankAccount_AssetTransfer with 
       assetCid = aliceAsset 
       newOwner = bob 
   

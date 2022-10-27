@@ -1,7 +1,7 @@
 module Account.Test where 
 
 import Daml.Script 
-import qualified DA.Set as Set 
+import DA.Set as Set 
 import qualified DA.List as L
 
 import Asset 
@@ -17,6 +17,11 @@ template Helper with
       controller owner 
       do 
         forA assetCids \assetCid -> fetch assetCid 
+    nonconsuming choice Fetch_AssetTransfers: [AssetTransfer] with 
+        assetTransferCids: [ContractId AssetTransfer] 
+      controller owner 
+      do 
+        forA assetTransferCids \assetTransferCid -> fetch assetTransferCid 
 
 test_Invite_Holder_resharable: Script () 
 test_Invite_Holder_resharable = do 
@@ -84,4 +89,117 @@ sortAssetByAmount a b
   | a.amount > b.amount = GT 
   | a.amount < b.amount = LT 
   | a.amount == b.amount = EQ 
+
+test_Merge_Split_amount_exceeds_balance = do 
+  (parties@Parties{..}, assetData@AssetData{..}) <- setup 
+
+  submitMustFail alice $ exerciseCmd aliceUsdAccount Merge_Split with assetCids = aliceUsdAssets, amounts = [110.0, 120.0] 
+
+  return ()
+
+test_Merge_Split_fungible_fail = do 
+  (parties@Parties{..}, assetData@AssetData{..}) <- setup 
+
+  submitMustFail charlie $ exerciseCmd charlieNftAccount Merge_Split with assetCids = [L.head charlieNftAssets], amounts = [1.0] 
+
+  return ()
+
+test_Merge_Split_negative_amount = do 
+  (parties@Parties{..}, assetData@AssetData{..}) <- setup 
+
+  submitMustFail alice $ exerciseCmd aliceUsdAccount Merge_Split with assetCids = aliceUsdAssets, amounts = [-30.0] 
+
+  return ()
+
+test_Merge_Split_assetType_mismatch = do 
+  (parties@Parties{..}, assetData@AssetData{..}) <- setup 
+
+  aliceEurInvitation <- submit eurBank $ exerciseCmd eurBankAccount Invite_New_Asset_Holder with recipient = alice 
+  aliceEurAccount <- submit alice $ exerciseCmd aliceEurInvitation AssetHoldingAccountProposal_Accept 
+  aliceEurAsset1 <- submit eurBank $ exerciseCmd aliceEurAccount Airdrop with amount = 10.0 
+
+  submitMustFail alice $ exerciseCmd aliceUsdAccount Merge_Split with assetCids = aliceEurAsset1 :: aliceUsdAssets, amounts = [30.0] 
+
+  return ()
+
+test_Merge_Split_owner_mismatch = do 
+  (parties@Parties{..}, assetData@AssetData{..}) <- setup 
+
+  aliceEurInvitation <- submit eurBank $ exerciseCmd eurBankAccount Invite_New_Asset_Holder with recipient = alice 
+  aliceEurAccount <- submit alice $ exerciseCmd aliceEurInvitation AssetHoldingAccountProposal_Accept 
+  aliceEurAsset1 <- submit eurBank $ exerciseCmd aliceEurAccount Airdrop with amount = 10.0 
+  nAliceEurAsset1 <- submit alice $ exerciseCmd aliceEurAsset1 Asset_Add_Observer with newObserver = bob  
+
+  submitMustFail bob $ exerciseCmd bobEurAccount Merge_Split with assetCids = nAliceEurAsset1 :: bobEurAssets, amounts = [30.0] 
+
+  return ()
+
+test_Transfer = do 
+  (parties@Parties{..}, assetData@AssetData{..}) <- setup 
+
+  bobUsdInvitation <- submit usdBank $ exerciseCmd usdBankAccount Invite_New_Asset_Holder with recipient = bob 
+  bobUsdAccount <- submit bob $ exerciseCmd bobUsdInvitation AssetHoldingAccountProposal_Accept 
+  charlieUsdInvitation <- submit usdBank $ exerciseCmd usdBankAccount Invite_New_Asset_Holder with recipient = charlie
+  charlieUsdAccount <- submit charlie $ exerciseCmd charlieUsdInvitation AssetHoldingAccountProposal_Accept 
+
+  assetTransferCids <- submit alice $ exerciseCmd aliceUsdAccount Create_Transfers with 
+    assetCids = take 2 aliceUsdAssets 
+    transfers = [(25.0, bob), (35.0, bob), (40.0, charlie)] 
+  
+  bobHelper <- submit bob $ createCmd Helper with owner = bob 
+  -- assetTransferCids might not be in the same order as in transfers
+  assetTransfers <- submit bob $ exerciseCmd bobHelper Fetch_AssetTransfers with assetTransferCids = (take 2 assetTransferCids)  
+  
+  let assetTransfer1 = L.head assetTransfers 
+  debug(assetTransfer1)
+  assert (assetTransfer1.receiver == bob)
+  assert (assetTransfer1.asset.amount == 25.0)
+
+  let assetTransferCid2 = (L.!!) assetTransferCids 1
+  bobUsdAssetCid2 <- submit bob $ exerciseCmd bobUsdAccount Deposit_Transfer_Into_Account with assetTransferCid = assetTransferCid2 
+  bobUsdAssets <- submit bob $ exerciseCmd bobHelper Fetch_Assets with assetCids = [bobUsdAssetCid2] 
+  let bobUsdAsset2 = L.head bobUsdAssets 
+  assert (bobUsdAsset2.amount == 35.0) 
+
+  charlieHelper <- submit charlie $ createCmd Helper with owner = charlie 
+  charlieUsdAssetCid <- submit charlie $ exerciseCmd charlieUsdAccount Deposit_Transfer_Into_Account with assetTransferCid = L.last assetTransferCids
+  charlieUsdAssets <- submit charlie $ exerciseCmd charlieHelper Fetch_Assets with assetCids = [charlieUsdAssetCid] 
+  let charlieUsdAsset = L.head charlieUsdAssets 
+  assert (charlieUsdAsset.amount == 40.0)
+  
+  return ()
+
+test_Transfer_nonfungible_fail = do 
+  (parties@Parties{..}, assetData@AssetData{..}) <- setup 
+
+  let 
+    nftAssetType = AssetType with 
+      issuer = artist 
+      symbol = "Picture" 
+      fungible = False 
+      reference = Some "" 
+
+  nftAsset3 <- submit artist $ createCmd Asset with assetType = nftAssetType, owner = artist, amount = 1.0, observers = Set.empty 
+  nftAsset4 <- submit artist $ createCmd Asset with assetType = nftAssetType, owner = artist, amount = 1.0, observers = Set.empty 
+  submitMustFail artist $ exerciseCmd artistNftAccount Create_Transfers with 
+    assetCids = [nftAsset3, nftAsset4] 
+    transfers = [(1.0, charlie), (1.0, charlie)] 
+  
+  return ()
+
+test_Transfer_exceeds_balance = do 
+  (parties@Parties{..}, assetData@AssetData{..}) <- setup 
+
+  bobUsdInvitation <- submit usdBank $ exerciseCmd usdBankAccount Invite_New_Asset_Holder with recipient = bob 
+  bobUsdAccount <- submit bob $ exerciseCmd bobUsdInvitation AssetHoldingAccountProposal_Accept 
+  
+  submitMustFail alice $ exerciseCmd aliceUsdAccount Create_Transfers with 
+    assetCids = take 2 aliceUsdAssets 
+    transfers = [(120.1, bob)] 
+
+  return ()
+
+
+
+
 
