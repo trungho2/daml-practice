@@ -1,0 +1,70 @@
+module Setup where 
+
+import Daml.Script 
+import DA.Text as T
+import DA.Foldable (forA_)
+import DA.Optional (fromSomeNote)
+import qualified User as U
+
+data TestUser = TestUser with 
+  alias: Text 
+  public: Party 
+
+setup: Script () 
+setup = do 
+  public <- createPublicRefactor 
+  let aliases = ["Alice", "Bob", "Charlie", "Trung", "John"]
+  [alice, bob, charlie, trung, john] <- mapA (\alias -> createTestUserRefactor (TestUser alias public)) aliases
+
+  aliceUser <- submit alice do 
+    createCmd U.User with username = alice, following = [bob]
+
+  aliceUser1 <- submit alice do 
+    exerciseCmd aliceUser U.Follow with partyToFollow = charlie 
+
+  submitMustFail alice do 
+    exerciseCmd aliceUser1 U.Follow with partyToFollow = charlie 
+
+  return ()
+
+createPublic: Script Party 
+createPublic = do 
+  userId <- validateUserId $ toUserId "Public"
+  publicParty <- allocateParty "Public"
+  createUser (User userId (Some publicParty)) $ [CanActAs publicParty]
+  return publicParty
+
+createPublicRefactor: Script Party
+createPublicRefactor = do 
+  publicUser <- getOrCreateUser "Public" None 
+  return $ getPrimaryParty publicUser
+
+createTestUser: TestUser -> Script Party
+createTestUser TestUser{alias, public} = do 
+  userId <- validateUserId $ toUserId alias 
+  uParty <- allocateParty alias 
+  createUser (User userId (Some uParty)) $ CanActAs uParty :: [CanReadAs public]
+  return uParty
+
+createTestUserRefactor: TestUser -> Script Party 
+createTestUserRefactor TestUser{alias, public} = do 
+  user <- getOrCreateUser alias $ Some public 
+  return $ getPrimaryParty user 
+
+getOrCreateUser: Text -> Optional Party -> Script User -- we can just return party instead of user, and remove the getPrimaryParty function
+getOrCreateUser alias publicM = do 
+  userId <- validateUserId $ toUserId alias 
+  try 
+    getUser userId 
+  catch 
+    UserNotFound _ -> do 
+      p <- allocateParty alias 
+      let user = User userId (Some p)
+      createUser user $ CanActAs p :: [CanReadAs public | Some public <- [publicM]]
+      return user
+
+toUserId: Text -> Text 
+toUserId t = T.asciiToLower t 
+
+getPrimaryParty: User -> Party 
+getPrimaryParty u = fromSomeNote ("can't get party for user " <> show u) u.primaryParty 

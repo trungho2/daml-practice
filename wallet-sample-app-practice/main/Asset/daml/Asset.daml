@@ -1,0 +1,90 @@
+module Asset where 
+
+import DA.Set as Set
+
+data AssetType = AssetType with 
+    issuer: Party 
+    symbol: Text 
+    fungible: Bool -- true means able to split and merge
+    reference: Optional Text 
+  deriving (Eq, Show) 
+
+template Asset with 
+    assetType: AssetType 
+    owner: Party 
+    amount: Decimal 
+    observers: Set Party
+  where 
+    signatory assetType.issuer, owner 
+    observer observers 
+    ensure (if assetType.fungible then amount > 0.0 else amount == 1.0)
+    -- determined by amount so can't use key? 
+
+    choice Asset_Add_Observer: ContractId Asset with 
+        newObserver: Party 
+      controller owner 
+      do 
+        create this with observers = (Set.insert newObserver observers)
+
+template AssetTransfer with 
+    asset: Asset 
+    receiver: Party 
+  where 
+    -- need issuer authority (using AssetHoldingAccount)
+    signatory (signatory asset) 
+    observer receiver 
+    -- ensure cannot create AssetTransfer that can't be transfered or rolled back?
+    ensure (if asset.assetType.fungible then asset.amount > 0.0 else asset.amount == 1.0)
+
+    choice Cancel_Transfer: ContractId Asset 
+      controller asset.owner 
+      do 
+        create asset 
+    choice Reject_Transfer: ContractId Asset 
+      controller receiver 
+      do 
+        create asset 
+    choice Accept_Transfer: ContractId Asset 
+    -- issuer authority so receiver needs AssetHoldingAccount to accept
+      controller receiver, asset.assetType.issuer 
+      do 
+        create asset with 
+          owner = receiver 
+          observers = Set.empty 
+      
+
+template BankAsset with 
+    assetType: AssetType 
+    owner: Party 
+    amount: Decimal 
+    observers: Set Party 
+  where 
+    signatory assetType.issuer 
+    observer owner, observers 
+    ensure (if assetType.fungible then amount > 0.0 else amount == 1.0) 
+
+    choice BankAsset_Transfer: ContractId BankAsset with 
+        newOwner: Party 
+      controller assetType.issuer 
+      do 
+        assertMsg ("asset must have the same type") (this.assetType == assetType) 
+        assertMsg ("asset must have the same owner") (this.owner == owner) 
+        create this with owner = newOwner 
+
+template BankAccount with 
+    assetType: AssetType 
+    owner: Party 
+  where 
+    signatory assetType.issuer 
+    observer owner 
+    key (assetType, owner): (AssetType, Party)
+    maintainer key._1.issuer  
+
+    nonconsuming choice BankAccount_AssetTransfer: ContractId BankAsset with 
+        assetCid: ContractId BankAsset 
+        newOwner: Party 
+      controller assetType.issuer  
+      do 
+        -- ensure newOwner has a bank account
+        (_, _) <- fetchByKey @BankAccount (assetType, newOwner)
+        exercise assetCid BankAsset_Transfer with newOwner 

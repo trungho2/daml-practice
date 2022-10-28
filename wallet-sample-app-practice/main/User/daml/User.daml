@@ -1,0 +1,25 @@
+module User where 
+
+template User with 
+    username: Party 
+  where 
+    signatory username 
+    key username: Party 
+    maintainer key 
+
+template Alias with 
+    username: Party 
+    alias: Text 
+    public: Party 
+  where 
+    signatory username 
+    observer public 
+    key (username, public): (Party, Party) 
+    maintainer key._1 
+
+    choice Change: ContractId Alias with 
+        newAlias: Text 
+      controller username 
+      do 
+        assertMsg ("New alias must be different from previous one") (newAlias /= alias)
+        create this with alias = newAlias 
