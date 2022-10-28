@@ -199,7 +199,120 @@ test_Transfer_exceeds_balance = do
 
   return ()
 
+test_Trade_fungible_for_fungible = do 
+  (parties@Parties{..}, assetData@AssetData{..}) <- setup 
+
+  let 
+    eurAssetType = AssetType with 
+      issuer = eurBank 
+      symbol = "EUR" 
+      fungible = True 
+      reference = Some "" 
+  
+  aliceEurInvitation <- submit eurBank $ exerciseCmd eurBankAccount Invite_New_Asset_Holder with recipient = alice 
+  aliceEurAccount <- submit alice $ exerciseCmd aliceEurInvitation AssetHoldingAccountProposal_Accept 
+  bobUsdInvitation <- submit usdBank $ exerciseCmd usdBankAccount Invite_New_Asset_Holder with recipient = bob 
+  bobUsdAccount <- submit bob $ exerciseCmd bobUsdInvitation AssetHoldingAccountProposal_Accept 
+
+  tradeCid <- submit alice $ exerciseCmd aliceUsdAccount Create_Trade with 
+    assetCids = aliceUsdAssets 
+    offeredAmount = 180.0 
+    requestedAsset = Asset with assetType = eurAssetType, owner = bob, amount = 180.0, observers = Set.empty 
+  
+  (aliceEurAssetCid, bobUsdAssetCid) <- submit bob $ exerciseCmd tradeCid Trade_Accept with requestedAssetCids = bobEurAssets 
+
+  aliceHelper <- submit alice $ createCmd Helper with owner = alice 
+  bobHelper <- submit bob $ createCmd Helper with owner = bob 
+
+  aliceEurAssets <- submit alice $ exerciseCmd aliceHelper Fetch_Assets with assetCids = [aliceEurAssetCid] 
+  bobUsdAssets <- submit bob $ exerciseCmd bobHelper Fetch_Assets with assetCids = [bobUsdAssetCid] 
+
+  let 
+    aliceEurAsset = L.head aliceEurAssets 
+    bobUsdAsset = L.head bobUsdAssets 
+  
+  assert (aliceEurAsset.amount == 180.0)
+  assert (aliceEurAsset.assetType.symbol == "EUR")
+  assert (bobUsdAsset.amount == 180.0)
+  assert (bobUsdAsset.assetType.symbol == "USD")
+
+  return ()
+
+test_Trade_fungible_for_nonfungible = do 
+  (parties@Parties{..}, assetData@AssetData{..}) <- setup 
+
+  let 
+    nftAssetType = AssetType with 
+      issuer = artist 
+      symbol = "Picture" 
+      fungible = False 
+      reference = Some "" 
+
+  aliceNftInvitation <- submit artist $ exerciseCmd artistNftAccount Invite_New_Asset_Holder with recipient = alice 
+  aliceNftAccount <- submit alice $ exerciseCmd aliceNftInvitation AssetHoldingAccountProposal_Accept 
+  charlieUsdInvitation <- submit usdBank $ exerciseCmd usdBankAccount Invite_New_Asset_Holder with recipient = charlie 
+  charlieUsdAccount <- submit charlie $ exerciseCmd charlieUsdInvitation AssetHoldingAccountProposal_Accept 
+
+  tradeCid <- submit alice $ exerciseCmd aliceUsdAccount Create_Trade with 
+    assetCids = aliceUsdAssets 
+    offeredAmount = 180.0 
+    requestedAsset = Asset with assetType = nftAssetType, owner = charlie, amount = 1.0, observers = Set.empty 
+  
+  (aliceNftAssetCid, charlieUsdAssetCid) <- submit charlie $ exerciseCmd tradeCid Trade_Accept with requestedAssetCids = [L.head charlieNftAssets] 
+
+  aliceHelper <- submit alice $ createCmd Helper with owner = alice 
+  charlieHelper <- submit charlie $ createCmd Helper with owner = charlie 
+
+  aliceNftAssets <- submit alice $ exerciseCmd aliceHelper Fetch_Assets with assetCids = [aliceNftAssetCid] 
+  charlieUsdAssets <- submit charlie $ exerciseCmd charlieHelper Fetch_Assets with assetCids = [charlieUsdAssetCid] 
+
+  let 
+    aliceNftAsset = L.head aliceNftAssets 
+    charlieUsdAsset = L.head charlieUsdAssets 
+  
+  assert (aliceNftAsset.amount == 1.0)
+  assert (aliceNftAsset.assetType.symbol == "Picture")
+  assert (charlieUsdAsset.amount == 180.0)
+  assert (charlieUsdAsset.assetType.symbol == "USD")
+
+  return ()
 
 
+test_Trade_nonfungible_for_fungible = do 
+  (parties@Parties{..}, assetData@AssetData{..}) <- setup 
 
+  let 
+    eurAssetType = AssetType with 
+      issuer = eurBank 
+      symbol = "EUR" 
+      fungible = True 
+      reference = Some "" 
+  
+  charlieEurInvitation <- submit eurBank $ exerciseCmd eurBankAccount Invite_New_Asset_Holder with recipient = charlie 
+  charlieEurAccount <- submit charlie $ exerciseCmd charlieEurInvitation AssetHoldingAccountProposal_Accept 
+  bobNftInvitation <- submit artist $ exerciseCmd artistNftAccount Invite_New_Asset_Holder with recipient = bob 
+  bobNftAccount <- submit bob $ exerciseCmd bobNftInvitation AssetHoldingAccountProposal_Accept 
 
+  tradeCid <- submit charlie $ exerciseCmd charlieNftAccount Create_Trade with 
+    assetCids = [L.last charlieNftAssets] 
+    offeredAmount = 1.0 
+    requestedAsset = Asset with assetType = eurAssetType, owner = bob, amount = 150.0, observers = Set.empty 
+  
+  (charlieEurAssetCid, bobNftAssetCid) <- submit bob $ exerciseCmd tradeCid Trade_Accept with requestedAssetCids = bobEurAssets 
+
+  charlieHelper <- submit charlie $ createCmd Helper with owner = charlie 
+  bobHelper <- submit bob $ createCmd Helper with owner = bob 
+
+  charlieEurAssets <- submit charlie $ exerciseCmd charlieHelper Fetch_Assets with assetCids = [charlieEurAssetCid] 
+  bobNftAssets <- submit bob $ exerciseCmd bobHelper Fetch_Assets with assetCids = [bobNftAssetCid] 
+
+  let 
+    charlieEurAsset = L.head charlieEurAssets 
+    bobNftAsset = L.head bobNftAssets 
+  
+  assert (charlieEurAsset.amount == 150.0)
+  assert (charlieEurAsset.assetType.symbol == "EUR")
+  assert (bobNftAsset.amount == 1.0)
+  assert (bobNftAsset.assetType.symbol == "Picture")
+
+  return ()
